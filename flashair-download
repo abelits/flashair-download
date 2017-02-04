@@ -1,0 +1,95 @@
+#!/bin/sh
+WLANIF="wlan0"
+SSID="FA-XP1"
+BASEDIR="/home/user/Desktop/Photos/Camera1"
+BASEURL="http://192.168.0.1"
+
+sstring()
+{
+sed -e 's/[^a-zA-Z0-9./_-]/_/g' \
+ -e 's/^\.\.\//_\.\.\//' \
+ -e 's/\/\.\.\//\/_\.\._\//g'
+}
+
+check_wlan()
+{
+curr_conn=$(nmcli device show "${WLANIF}" | \
+  grep -F 'GENERAL.CONNECTION:' | \
+  sed -e 's/^.*: *//')
+while [ "${curr_conn}" != "${SSID}" ]
+  do
+    if [ "${curr_conn}" != "--" ]
+      then
+        nmcli connection down "${curr_conn}"
+      fi
+    nmcli device wifi rescan ifname "${WLANIF}"
+    found=""
+    while [ "${found}" = "" ]
+      do
+        found=$(nmcli device wifi list ifname "${WLANIF}" | \
+          sed -e 's/^\** *//' | cut -d' ' -f1 | tail -n +2 | \
+          grep -F "${SSID}")
+      done
+    nmcli connection up "${SSID}" ifname "${WLANIF}"
+    curr_conn=$(nmcli device show "${WLANIF}" | \
+      grep -F 'GENERAL.CONNECTION:' | \
+      sed -e 's/^.*: *//')
+  done
+}
+
+orig_conn=$(nmcli device show "${WLANIF}" | \
+  grep -F 'GENERAL.CONNECTION:' | \
+  sed -e 's/^.*: *//')
+
+check_wlan
+wget -O- "${BASEURL}/DCIM/" 2>/dev/null| \
+  grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
+(
+while read line
+  do
+    dir=$(echo $line | cut -d, -f1 | sstring)
+    upfname=$(echo $line | cut -d, -f2 | sstring)
+    len=$(echo $line | cut -d, -f3)
+    if [ "${dir}" = "/DCIM" -a "${len}" = "0" ]
+      then
+check_wlan
+wget -O- "${BASEURL}/DCIM/${upfname}" 2>/dev/null| \
+  grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
+(
+while read line
+  do
+    dir=$(echo $line | cut -d, -f1 | sstring)
+    fname=$(echo $line | cut -d, -f2 | sstring)
+    len=$(echo $line | cut -d, -f3)
+    if [ "${dir}" = "/DCIM/${upfname}" ]
+      then
+        lfile=$(stat -c "%s" \
+          "${BASEDIR}/${dir}/${fname}") 2>/dev/null
+        if [ "${lfile}" = "${len}" ]
+          then
+            echo "${fname} is already present"
+          else
+            [ -d "${BASEDIR}/${dir}" ] || \
+              mkdir -p "${BASEDIR}/${dir}"
+            check_wlan
+            wget -O "${BASEDIR}/${dir}/${fname}" \
+              "${BASEURL}/${dir}/${fname}"
+          fi
+      fi
+  done
+)
+      fi
+  done
+)
+
+if [ "${orig_conn}" = "--" ]
+  then
+    echo "Shutting down ${SSID}"
+    nmcli connection down "${SSID}"
+  else
+    if [ "${orig_conn}" != "${SSID}" ]
+      then
+        echo "Restoring connection ${orig_conn}"
+        nmcli connection up "${orig_conn}" ifname "${WLANIF}"
+      fi
+  fi
