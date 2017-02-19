@@ -1,9 +1,33 @@
 #!/bin/sh
+
+#
+# Network interface for wifi connection
+#
 WLANIF="wlan0"
+
+#
+# Connection name and SSID of the FlashAir card
+#
 SSID="FA-XP1"
+
+#
+# Local directory above the copy of the camera's DCIM directory
+#
 BASEDIR="/home/user/Desktop/Photos/Camera1"
+
+#
+# FlashAir URL above the DCIM directory
+#
 BASEURL="http://192.168.0.1"
 
+#
+# Utilities
+#
+ECHO=$(which echo)
+
+#
+# Sanitize file name for interaction with FlashAir
+#
 sstring()
 {
 sed -e 's/[^a-zA-Z0-9./_-]/_/g' \
@@ -11,35 +35,106 @@ sed -e 's/[^a-zA-Z0-9./_-]/_/g' \
  -e 's/\/\.\.\//\/_\.\._\//g'
 }
 
+#
+# Display a single step of a spinner
+# on a VT100-compatible terminals
+#
+spinner_char=""
+spinner()
+{
+if [ "${spinner_char}" = "-" ] ; then spinner_char="\\" ; else
+if [ "${spinner_char}" = "\\" ] ; then spinner_char="|" ; else
+if [ "${spinner_char}" = "|" ] ; then spinner_char="/" ; else
+ spinner_char="-" ;
+fi;fi;fi
+${ECHO} -ne "\x1b[1D${spinner_char}"
+}
+
+#
+# Cleanup procedure for exit and signal handler
+#
+restore_wlan()
+{
+if [ "${orig_conn}" = "--" ]
+  then
+    echo "Disconnecting from ${SSID}"
+    nmcli connection down "${SSID}" >/dev/null 2>&1
+  else
+    if [ "${orig_conn}" != "${SSID}" ]
+      then
+        echo "Restoring connection ${orig_conn}"
+        nmcli connection up "${orig_conn}" ifname "${WLANIF}" >/dev/null 2>&1
+      fi
+  fi
+}
+
+#
+# Check if $SSID is the current connection, and
+# connect to it if this is not the case.
+#
+# This procedure will wait indefinitely if the
+# connection is not available.
+#
 check_wlan()
 {
-curr_conn=$(nmcli device show "${WLANIF}" | \
+curr_conn=$(nmcli device show "${WLANIF}" 2>/dev/null | \
   grep -F 'GENERAL.CONNECTION:' | \
   sed -e 's/^.*: *//')
 while [ "${curr_conn}" != "${SSID}" ]
   do
     if [ "${curr_conn}" != "--" ]
       then
-        nmcli connection down "${curr_conn}"
+        nmcli connection down "${curr_conn}" >/dev/null 2>&1
       fi
-    nmcli device wifi rescan ifname "${WLANIF}"
+    ${ECHO} -n "Scanning..."
+    nmcli device wifi rescan ifname "${WLANIF}" 2>/dev/null
+    ${ECHO} -n " Looking for ${SSID}... "
+    lasttime=$(($(date +%s)/20))
     found=""
     while [ "${found}" = "" ]
       do
-        found=$(nmcli device wifi list ifname "${WLANIF}" | \
+        currtime=$(($(date +%s)/20))
+        if [ "${currtime}" != "${lasttime}" ]
+          then
+            ${ECHO} -ne "\x0d\x1b[JScanning..."
+            nmcli device wifi rescan ifname "${WLANIF}" 2>/dev/null
+            sleep 10
+            ${ECHO} -n " Looking for ${SSID}... "
+            lasttime=$(($(date +%s)/20))
+          fi
+	sleep .5
+        found=$(nmcli device wifi list ifname "${WLANIF}" 2>/dev/null | \
           sed -e 's/^\** *//' | cut -d' ' -f1 | tail -n +2 | \
           grep -F "${SSID}")
+	spinner
       done
-    nmcli connection up "${SSID}" ifname "${WLANIF}"
-    curr_conn=$(nmcli device show "${WLANIF}" | \
+    ${ECHO} -ne "\x0d\x1b[JConnecting to ${SSID}..."
+    nmcli connection up "${SSID}" ifname "${WLANIF}" >/dev/null 2>&1
+    curr_conn=$(nmcli device show "${WLANIF}" 2>/dev/null | \
       grep -F 'GENERAL.CONNECTION:' | \
       sed -e 's/^.*: *//')
+    if [ "${curr_conn}" = "${SSID}" ]
+      then
+        ${ECHO} -e "\x0d\x1b[JConnected to ${SSID}"
+      else
+        echo " Failure"
+      fi
   done
 }
 
-orig_conn=$(nmcli device show "${WLANIF}" | \
+#
+# Main body of the script
+#
+orig_conn=$(nmcli device show "${WLANIF}" 2>/dev/null | \
   grep -F 'GENERAL.CONNECTION:' | \
   sed -e 's/^.*: *//')
+
+trap "echo "" ; restore_wlan; exit 0" 1 2 15
+
+if [ "${orig_conn}" != "--" ]
+  then
+    echo "Originally connected to ${orig_conn}"
+  fi
 
 check_wlan
 wget -O- "${BASEURL}/DCIM/" 2>/dev/null| \
@@ -64,11 +159,9 @@ while read line
     if [ "${dir}" = "/DCIM/${upfname}" ]
       then
         lfile=$(stat -c "%s" \
-          "${BASEDIR}/${dir}/${fname}") 2>/dev/null
-        if [ "${lfile}" = "${len}" ]
+          "${BASEDIR}/${dir}/${fname}" 2>/dev/null )
+        if [ "${lfile}" != "${len}" ]
           then
-            echo "${fname} is already present"
-          else
             [ -d "${BASEDIR}/${dir}" ] || \
               mkdir -p "${BASEDIR}/${dir}"
             check_wlan
@@ -81,15 +174,4 @@ while read line
       fi
   done
 )
-
-if [ "${orig_conn}" = "--" ]
-  then
-    echo "Shutting down ${SSID}"
-    nmcli connection down "${SSID}"
-  else
-    if [ "${orig_conn}" != "${SSID}" ]
-      then
-        echo "Restoring connection ${orig_conn}"
-        nmcli connection up "${orig_conn}" ifname "${WLANIF}"
-      fi
-  fi
+restore_wlan
