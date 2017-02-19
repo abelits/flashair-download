@@ -20,6 +20,24 @@ BASEDIR="/home/user/Desktop/Photos/Camera1"
 #
 BASEURL="http://192.168.0.1"
 
+check="true"
+for ex in \
+ echo echo sleep date grep sed cut tail nmcli wget
+  do
+    loc=$(which "${ex}")
+    if [ "${loc}" = "" ]
+      then
+        echo "${ex} is missing"
+        check="false"
+    fi
+done
+
+if [ "${check}" = "false" ]
+  then
+    echo "Some utilities are missing"
+    exit 1
+fi
+
 #
 # Utilities
 #
