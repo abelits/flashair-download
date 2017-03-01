@@ -1,2 +1,2 @@
 # flashair-download
-Photo download script for Toshiba FlashAir cards.
+Photo download script for Toshiba FlashAir and Transcend Wi-Fi SD cards.
