@@ -1,6 +1,10 @@
 #!/bin/sh
 
 #
+# Hardware type, for now only "FlashAir" is supported
+HWTYPE="FlashAir"
+
+#
 # Network interface for wifi connection
 #
 WLANIF="wlan0"
@@ -77,13 +81,13 @@ if [ "${orig_conn}" = "--" ]
   then
     echo "Disconnecting from ${SSID}"
     nmcli connection down "${SSID}" >/dev/null 2>&1
-  else
-    if [ "${orig_conn}" != "${SSID}" ]
-      then
-        echo "Restoring connection ${orig_conn}"
-        nmcli connection up "${orig_conn}" ifname "${WLANIF}" >/dev/null 2>&1
-      fi
+else
+  if [ "${orig_conn}" != "${SSID}" ]
+    then
+      echo "Restoring connection ${orig_conn}"
+      nmcli connection up "${orig_conn}" ifname "${WLANIF}" >/dev/null 2>&1
   fi
+fi
 }
 
 #
@@ -103,7 +107,7 @@ while [ "${curr_conn}" != "${SSID}" ]
     if [ "${curr_conn}" != "--" ]
       then
         nmcli connection down "${curr_conn}" >/dev/null 2>&1
-      fi
+    fi
     ${ECHO} -n "Scanning..."
     nmcli device wifi rescan ifname "${WLANIF}" 2>/dev/null
     ${ECHO} -n " Looking for ${SSID}... "
@@ -119,7 +123,7 @@ while [ "${curr_conn}" != "${SSID}" ]
             sleep 10
             ${ECHO} -n " Looking for ${SSID}... "
             lasttime=$(($(date +%s)/20))
-          fi
+        fi
 	sleep .5
         found=$(nmcli device wifi list ifname "${WLANIF}" 2>/dev/null | \
           sed -e 's/^\** *//' | cut -d' ' -f1 | tail -n +2 | \
@@ -134,9 +138,9 @@ while [ "${curr_conn}" != "${SSID}" ]
     if [ "${curr_conn}" = "${SSID}" ]
       then
         ${ECHO} -e "\x0d\x1b[JConnected to ${SSID}"
-      else
-        echo " Failure"
-      fi
+    else
+      echo " Failure"
+    fi
   done
 }
 
@@ -152,44 +156,53 @@ trap "echo "" ; restore_wlan; exit 0" 1 2 15
 if [ "${orig_conn}" != "--" ]
   then
     echo "Originally connected to ${orig_conn}"
-  fi
+fi
 
 check_wlan
+
+case "${HWTYPE}" in
+ 
+    "FlashAir")
 wget -O- "${BASEURL}/DCIM/" 2>/dev/null| \
   grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
-(
+  (
 while read line
   do
     dir=$(echo $line | cut -d, -f1 | sstring)
-    upfname=$(echo $line | cut -d, -f2 | sstring)
-    len=$(echo $line | cut -d, -f3)
-    if [ "${dir}" = "/DCIM" -a "${len}" = "0" ]
+    upfilename=$(echo $line | cut -d, -f2 | sstring)
+    filesize=$(echo $line | cut -d, -f3)
+    if [ "${dir}" = "/DCIM" -a "${filesize}" = "0" ]
       then
-check_wlan
-wget -O- "${BASEURL}/DCIM/${upfname}" 2>/dev/null| \
-  grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
-(
+        check_wlan
+        wget -O- "${BASEURL}/DCIM/${upfilename}" 2>/dev/null| \
+          grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
+          (
 while read line
   do
     dir=$(echo $line | cut -d, -f1 | sstring)
-    fname=$(echo $line | cut -d, -f2 | sstring)
-    len=$(echo $line | cut -d, -f3)
-    if [ "${dir}" = "/DCIM/${upfname}" ]
+    filename=$(echo $line | cut -d, -f2 | sstring)
+    filesize=$(echo $line | cut -d, -f3)
+    if [ "${dir}" = "/DCIM/${upfilename}" ]
       then
-        lfile=$(stat -c "%s" \
-          "${BASEDIR}/${dir}/${fname}" 2>/dev/null )
-        if [ "${lfile}" != "${len}" ]
+        local_filesize=$(stat -c "%s" \
+                              "${BASEDIR}/${dir}/${filename}" 2>/dev/null )
+        if [ "${local_filesize}" != "${filesize}" ]
           then
             [ -d "${BASEDIR}/${dir}" ] || \
               mkdir -p "${BASEDIR}/${dir}"
             check_wlan
-            wget -O "${BASEDIR}/${dir}/${fname}" \
-              "${BASEURL}/${dir}/${fname}"
-          fi
-      fi
+            wget -O "${BASEDIR}/${dir}/${filename}" \
+                 "${BASEURL}/${dir}/${filename}"
+        fi
+    fi
   done
-)
-      fi
+          )
+    fi
   done
-)
+  )
+;;
+    *)
+echo "Unknown HWTYPE ${HWTYPE}" >&2
+;;
+esac
 restore_wlan
