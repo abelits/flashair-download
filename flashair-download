@@ -1,8 +1,10 @@
 #!/bin/sh
 
 #
-# Hardware type, for now only "FlashAir" is supported
+# Hardware type, "FlashAir" or "Transcend"
+
 HWTYPE="FlashAir"
+#HWTYPE="Transcend"
 
 #
 # Network interface for wifi connection
@@ -12,6 +14,7 @@ WLANIF="wlan0"
 #
 # Connection name and SSID of the FlashAir card
 #
+
 SSID="FA-XP1"
 
 #
@@ -22,7 +25,9 @@ BASEDIR="/home/user/Desktop/Photos/Camera1"
 #
 # FlashAir URL above the DCIM directory
 #
+
 BASEURL="http://192.168.0.1"
+#BASEURL="http://192.168.11.254"
 
 check="true"
 for ex in \
@@ -71,6 +76,67 @@ if [ "${spinner_char}" = "|" ] ; then spinner_char="/" ; else
 fi;fi;fi
 ${ECHO} -ne "\x1b[1D${spinner_char}"
 }
+
+
+#
+# Get directory from Transcend card
+#
+ts_getdirectory()
+{
+dir="${1}"
+count=""
+filename=""
+filetype=""
+wget -q -O- "${BASEURL}/cgi-bin/tslist?PATH=${dir}" | \
+  grep "FileName0=" | \
+  tr '&' '\n' | \
+  grep -E "File.*[0-9]*=" | \
+  grep -v "FileCount=" | \
+  while read line
+    do
+      newcount=$(echo "${line}" | sed -e "s/^[A-Za-z]*//" -e "s/=.*$//")
+      if [ "${count}" != "" -a  "${newcount}" != "${count}" ]
+        then
+            filename=""
+            filetype=""
+      fi
+      key=$(echo "${line}" | sed "s/[0-9=].*$//" | sstring)
+      value=$(echo "${line}" | sed "s/^.*=//" | sstring)
+      count="${newcount}"
+      if [ "${key}" = "FileName" ]
+        then
+          filename="${value}"
+      else
+        if [ "${key}" = "FileType" ]
+          then
+            filetype="${value}"
+        fi
+      fi
+      if [ "${filename}" != "" -a "${filetype}" != "" ]
+        then
+          if [ "${filetype}" = "File" ]
+            then
+              filesize=$(wget -q -O- "${BASEURL}/cgi-bin/tscmd?\
+CMD=GET_FILE_INFO&FILE=${dir}/${filename}" \
+               |  grep -i "File size:" | \
+               sed -e "s/^.*:[^0-9]*//" -e "s/[^0-9]*$//")
+              echo "FILE"
+              echo "${filesize}"
+              echo "${filename}"
+          else
+            if [ "${filetype}" = "Directory" ]
+              then
+                echo "DIR"
+                echo "0"
+                echo "${filename}"
+            fi
+          fi
+          filename=""
+          filetype=""
+      fi
+    done
+}
+
 
 #
 # Cleanup procedure for exit and signal handler
@@ -161,7 +227,7 @@ fi
 check_wlan
 
 case "${HWTYPE}" in
- 
+
     "FlashAir")
 wget -O- "${BASEURL}/DCIM/" 2>/dev/null| \
   grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
@@ -200,6 +266,40 @@ while read line
     fi
   done
   )
+;;
+
+    "Transcend")
+ts_getdirectory "/www/sd/DCIM" | \
+  while read filetype
+    do
+      read filesize
+      read filename
+      if [ "${filetype}" = "DIR" ]
+        then
+          dir="${filename}"
+          check_wlan
+          ts_getdirectory "/www/sd/DCIM/${dir}" | \
+            while read filetype
+              do
+                read filesize
+                read filename
+                if [ "${filetype}" = "FILE" ]
+                  then
+                    local_filesize=$(stat -c "%s" \
+                                        "${BASEDIR}/DCIM/${dir}/${filename}" \
+                                        2>/dev/null )
+                    if [ "${local_filesize}" != "${filesize}" ]
+                      then
+                        [ -d "${BASEDIR}/DCIM/${dir}" ] || \
+                          mkdir -p "${BASEDIR}/DCIM/${dir}"
+                        check_wlan
+                        wget -O "${BASEDIR}/DCIM/${dir}/${filename}" \
+                             "${BASEURL}/sd/DCIM/${dir}/${filename}"
+                    fi
+                fi
+              done
+      fi
+    done
 ;;
     *)
 echo "Unknown HWTYPE ${HWTYPE}" >&2
