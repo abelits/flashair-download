@@ -61,6 +61,14 @@ sed -e 's/[^a-zA-Z0-9./_-]/_/g' \
  -e 's/^\.\.\//_\.\.\//' \
  -e 's/\/\.\.\//\/_\.\._\//g'
 }
+#
+# Sanitize numbers for interaction with FlashAir
+#
+
+nstring()
+{
+sed 's/[^0-9]//g'
+}
 
 #
 # Display a single step of a spinner
@@ -77,6 +85,82 @@ fi;fi;fi
 ${ECHO} -ne "\x1b[1D${spinner_char}"
 }
 
+#
+# Get directory from FlashAir card
+#
+fa_getdirectory()
+{
+dir="${1}"
+wget -q -O- "${BASEURL}${dir}" | \
+  grep -E '(^wlansd\[[0-9]+\]=)|(^wlansd\.push\({)' | \
+  while read line
+    do
+      if echo "${line}" | grep -q -E '^wlansd\[[0-9]+\]='
+        then
+          line=$(echo "${line}" | cut -d\" -f2)
+          filename=$(echo "${line}" | cut -d, -f2 | sstring)
+          upfilename=$(echo "${line}" | cut -d, -f1 | sstring)
+          filesize=$(echo "${line}" | cut -d, -f3 | nstring)
+          if [ "${filesize}" = "0" ]
+            then
+              echo "DIR"
+          else
+              echo "FILE"
+          fi
+          echo "${filesize}"
+          echo "${upfilename}"
+          echo "${filename}"
+      else
+          echo "${line}" | cut -d\{ -f2- | sed 's/\});$//' | \
+            tr ',' '\n' | sed -e 's/^ \+//' -e 's/ \+$//' | \
+            (
+              filetype=""
+              filesize=""
+              upfilename=""
+              filename=""
+              finished=""
+              while read line
+                do
+                  key=$(echo "${line}" | cut -d':' -f1)
+                  value=$(echo "${line}" | cut -d':' -f2-)
+                  key=$(echo "${key}" | \
+                       sed -e 's/ *\"//' -e 's/\" *$//' | sstring)
+                  value=$(echo "${value}" | \
+                       sed -e 's/ *\"//' -e 's/\" *$//' | sstring)
+                  case "${key}" in
+                    "r_uri")
+                      upfilename="${value}"
+                      ;;
+                    "fname")
+                      filename="${value}"
+                      ;;
+                    "fsize")
+                      filesize=$(echo "${value}" | nstring)
+                      ;;
+                    "*")
+                      ;;
+                  esac
+                  if [ "${finished}" != "y" \
+                       -a "${filesize}" != "" \
+                       -a "${filename}" != "" \
+                       -a "${upfilename}" != "" ]
+                    then
+                      finished="y"
+                      if [ "${filesize}" = "0" ]
+                        then
+                          echo "DIR"
+                      else
+                          echo "FILE"
+                      fi
+                      echo "${filesize}"
+                      echo "${upfilename}"
+                      echo "${filename}"
+                  fi
+                done
+            )
+      fi
+    done
+}
 
 #
 # Get directory from Transcend card
@@ -119,7 +203,7 @@ wget -q -O- "${BASEURL}/cgi-bin/tslist?PATH=${dir}" | \
               filesize=$(wget -q -O- "${BASEURL}/cgi-bin/tscmd?\
 CMD=GET_FILE_INFO&FILE=${dir}/${filename}" \
                |  grep -i "File size:" | \
-               sed -e "s/^.*:[^0-9]*//" -e "s/[^0-9]*$//")
+               sed -e "s/^.*:[^0-9]*//" -e "s/[^0-9]*$//" | nstring)
               echo "FILE"
               echo "${filesize}"
               echo "${filename}"
@@ -190,11 +274,11 @@ while [ "${curr_conn}" != "${SSID}" ]
             ${ECHO} -n " Looking for ${SSID}... "
             lasttime=$(($(date +%s)/20))
         fi
-	sleep .5
+        sleep .5
         found=$(nmcli device wifi list ifname "${WLANIF}" 2>/dev/null | \
           sed -e 's/^\** *//' | cut -d' ' -f1 | tail -n +2 | \
           grep -F "${SSID}")
-	spinner
+        spinner
       done
     ${ECHO} -ne "\x0d\x1b[JConnecting to ${SSID}..."
     nmcli connection up "${SSID}" ifname "${WLANIF}" >/dev/null 2>&1
@@ -229,26 +313,22 @@ check_wlan
 case "${HWTYPE}" in
 
     "FlashAir")
-wget -O- "${BASEURL}/DCIM/" 2>/dev/null| \
-  grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
-  (
-while read line
+fa_getdirectory "/DCIM/" | \
+while read filetype
   do
-    dir=$(echo $line | cut -d, -f1 | sstring)
-    upfilename=$(echo $line | cut -d, -f2 | sstring)
-    filesize=$(echo $line | cut -d, -f3)
-    if [ "${dir}" = "/DCIM" -a "${filesize}" = "0" ]
+    read filesize
+    read dir
+    read upfilename
+    if [ "${dir}" = "/DCIM" -a "${filetype}" = "DIR" -a "${filesize}" = "0" ]
       then
         check_wlan
-        wget -O- "${BASEURL}/DCIM/${upfilename}" 2>/dev/null| \
-          grep -E '^wlansd\[[0-9]+\]='| cut -d\" -f2 | \
-          (
-while read line
+        fa_getdirectory "/DCIM/${upfilename}" | \
+            while read filetype
   do
-    dir=$(echo $line | cut -d, -f1 | sstring)
-    filename=$(echo $line | cut -d, -f2 | sstring)
-    filesize=$(echo $line | cut -d, -f3)
-    if [ "${dir}" = "/DCIM/${upfilename}" ]
+              read filesize
+              read dir
+              read filename
+              if [ "${dir}" = "/DCIM/${upfilename}" -a "${filetype}" = "FILE" ]
       then
         local_filesize=$(stat -c "%s" \
                               "${BASEDIR}/${dir}/${filename}" 2>/dev/null )
@@ -262,10 +342,8 @@ while read line
         fi
     fi
   done
-          )
     fi
   done
-  )
 ;;
 
     "Transcend")
